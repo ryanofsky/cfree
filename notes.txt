@@ -1,3 +1,70 @@
+========================================
+explanations of various features
+
+Probalistic Drop (PD) and Do Not Die on DNF (DNDoDNF)
+http://thread.gmane.org/gmane.network.freenet.devel/8629
+"Adapating Freenet to NGRouting"
+Tue, 09 Dec 2003 03:18:01 +0000
+
+Binary Estimators
+http://thread.gmane.org/gmane.network.freenet.devel/8369
+"Decaying Exponential Decay for binary estimators"
+Wed, 03 Dec 2003 03:24:35 +0000
+
+Fine grained failure estimation
+http://thread.gmane.org/gmane.network.freenet.devel/8143
+"Corrections to NGR formula (improves routing and protects from black hole attack)"
+Fri, 28 Nov 2003 02:21:46 +0000
+
+Unobtanium Routing
+http://thread.gmane.org/gmane.network.freenet.devel/7791
+"Improving NGR"
+Mon, 17 Nov 2003 09:05:56 +0000
+
+Unobtanium Routing Implementation
+http://thread.gmane.org/gmane.network.freenet.devel/8329
+"Implementation of unobtanium selective rejection"
+Tue, 02 Dec 2003 20:23:27 +0000
+
+Multiplexing (MUXing)
+http://thread.gmane.org/gmane.network.freenet.devel/4408
+Connection Multiplexing
+Fri, 25 Jul 2003 02:42:35 +0100
+
+Original NGRouting Estimator Formula
+http://thread.gmane.org/gmane.network.freenet.devel/4320
+"NGRouting formula summary"
+Wed, 23 Jul 2003 18:56:16 +0100
+
+pcaching
+http://thread.gmane.org/gmane.network.freenet.devel/1750
+"Probabilistic caching"
+Fri, 28 Mar 2003 16:08:31 +0000
+
+description of announcment protcol (mid-thread)
+http://article.gmane.org/gmane.network.freenet.devel/5441
+"Re: Routing and Spcialisation"
+Tue, 16 Sep 2003 17:23:28 +0100
+
+ngrouting paper
+http://freenetproject.org/index.php?page=ngrouting
+
+========================================
+alternate implementations
+
+ocaml: http://savannah.gnu.org/projects/ethel/
+c:     http://thalassocracy.org/libfreenet/
+c++:   http://cvs.sourceforge.net/viewcvs.py/freenet/whiterose/
+
+=====================
+alternate networks
+
+http://www.ovmj.org/GNUnet/
+http://entropy.stop1984.com/en/home.html
+http://www.grapevineproject.org/
+
+======================================
+
 Main
   FnpLinkManager - collection of peer connections, methods for creating and deleting em
   TransportHandler - use catalog of different transports (tcp, appletalk)
@@ -23,7 +90,12 @@ Main
 
 ============
 
-session.FnpLink.accept() - initial key exchange
+ConnectionHandler.process()
+-> ConnectionHandler.innerProcess()
+   -> ConnectionHandler.handleReceivedMessage() // file:///m:/russ/source/freenet/dox/ConnectionHandler_8java-source.html#l01230
+      -> PeerHandler.registerMessageReceived()
+      -> ConnectionHandler.handleReceivedIdentifyMessage()
+      -> Ticker.add()
 
 node.Main.startNode()
   -> transport.tcpConnection.startSelectorLoops()
@@ -52,7 +124,7 @@ Node.scheduleConnectionOpener()
    ConnectionOpener.scheduleConnectionOpener()
    ?> ConnectionOpener.checkpoint()
       -> OpenConnectionManager.makePeerHandler()
-      -> OpenConnectionManager.createConnection()
+      -> OpenConnectionManager.createConnection() // file:///m:/russ/source/freenet/dox/OpenConnectionManager_8java-source.html#l00517
          -> OpenConnectionManager.ConnectionJob.run() // sent id bytes, file:///m:/russ/source/freenet/dox/FnpLink_8java-source.html#l00128
             -> session.FnpLinkManager.createOutgoing() // file:///m:/russ/source/freenet/dox/FnpLinkManager_8java-source.html#l00073
                -> session.FnpLink.solicit() file:///m:/russ/source/freenet/dox/FnpLink_8java-source.html#l00128
