@@ -9,3 +9,6 @@ env = Environment(CPPPATH=ACE_ROOT,
 env.Program(['cfree.cpp'], LIBS=['crypto++'])
 env.Program(['asynch.cpp'], LIBS=['ACE'],
 	    RPATH=os.path.join(ACE_ROOT, 'lib'))
+env.Program(['cat.cpp'], LIBS=['rt'])
+env.Program(['test.cpp'])
+
