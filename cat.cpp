@@ -6,14 +6,12 @@
 /* Test program to start building an asynchronous i/o 
  * framework. Things that gots to be done
  *
- * 1) Wait function needs to return error information.
- *    
- * 2) AsynchOp classes need to be rearranged and filled out. A first step is
+ * 1) AsynchOp classes need to be rearranged and filled out. A first step is
  *    to generalize the interface enough to support multiple implementations,
  *    such as a select() based implementation of asynchronous read and writes
  *    for nonblocking descriptors.
  *
- * 3) Then the ultimate goal is to be able to figure out a nice way to 
+ * 2) Then the ultimate goal is to be able to figure out a nice way to 
  *    implement complex asynchronous operations on top of primitive ones (i.e.
  *    readline on top of read). I have some ideas for using cooperative
  *    threads (fibers) for this. It'll require another overhaul of wait().
@@ -182,6 +180,15 @@ struct AioOp : public AsynchOp, public aiocb
     ResultNode<AioOp, R> n(*this, r);
     return n;
   }
+
+  struct Result
+  {
+    aiocb * cb;
+    int error()
+    {
+      return aio_error(cb);
+    }
+  };
 };
 
 struct IOError
@@ -216,10 +223,8 @@ struct ReadOp : public AioOp
       throw IOError(errno EARGS);
   }  
 
-  struct Result
+  struct Result : AioOp::Result
   {
-    aiocb * cb;
-
     int bytesRead()
     {
       return aio_return(cb);
@@ -243,10 +248,8 @@ void wait(const aiocb * list[], size_t len)
         int error = aio_error(list[i]);
         if (error == EINPROGRESS)
          inProgress = true;
-        else if (error == 0)
-          list[i] = NULL;
         else
-          throw IOError(error EARGS);
+          list[i] = NULL;
       }
     }
   }
@@ -301,6 +304,7 @@ int main(int, const char *[])
     
     ReadOp readOp;
     WriteOp writeOp;
+    int error;
     
     off_t offset = 0;
     readOp.init(STDIN_FILENO, offset, readPtr, BUFFER_SIZE);
@@ -308,7 +312,16 @@ int main(int, const char *[])
     for (;;)
     {
       ReadOp::Result readResult;
-      wait(readOp >> readResult && writeOp);
+      WriteOp::Result writeResult;
+      wait(readOp >> readResult && writeOp >> writeResult);
+
+      error = readResult.error();
+      if (error)
+        throw IOError(error EARGS);
+
+      error = writeResult.error();
+      if (error)
+        throw IOError(error EARGS);
 
       ssize_t readLen = readResult.bytesRead();
       if (readLen == 0)
