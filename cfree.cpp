@@ -174,7 +174,14 @@ static unsigned int bitLength(Integer const & i)
 /* Construct integer from unsigned big endian byte array */
 #define INTEGER(x) Integer((x), sizeof((x)))
 
-typedef PK_MessageAccumulatorImpl<DSA::SchemeOptions::HashFunction>
+/* these typedefs are just copies of the typedefs inside 
+   "DSA::SchemeOptions" which, for some reason, is private */
+typedef DL_Keys_DSA::PublicKey DSA_PublicKey;
+typedef DL_Keys_DSA::PrivateKey DSA_PrivateKey;
+typedef DL_Algorithm_GDSA<Integer> DSA_SignatureAlgorithm;
+typedef SHA DSA_HashFunction;
+
+typedef PK_MessageAccumulatorImpl<DSA_HashFunction>
         DSA_MessageAccumulator;
 
 // initialize accumulator used for signing
@@ -298,9 +305,11 @@ protected:
 
 static void disableNagle(Socket & socket)
 {
+#ifdef _WINDOWS
   int one = 1;
   if (::setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one)))
     throw std::runtime_error("no set option sucka");
+#endif
 }
 
 static void
@@ -430,7 +439,7 @@ const byte VER_BIT_MASK = 0x1f;
 // encrypt buf, writing to bt
 static void dlesEncrypt(BufferedTransformation & bt,
                         byte const * buf, unsigned len,
-                        DSA::SchemeOptions::PublicKey const & publicKey,
+                        DSA_PublicKey const & publicKey,
                         RandomNumberGenerator & rng)
 {
   // initialize parameters
@@ -481,7 +490,7 @@ static void dlesEncrypt(BufferedTransformation & bt,
 // read from bt, decrypt and store in buf
 static void dlesDecrypt(Source & bt,
                         byte * buf, unsigned len,
-                        DSA::SchemeOptions::PrivateKey const & privateKey)
+                        DSA_PrivateKey const & privateKey)
 {
   // initialize parameters
   DH::GroupParameters grp;
@@ -538,7 +547,7 @@ writeSignature(BufferedTransformation & write,
 {
   // get information about dsa signature
   DL_GroupParameters_GFP const & params = sign.GetKey().GetGroupParameters();
-  DSA::SchemeOptions::SignatureAlgorithm alg;
+  DSA_SignatureAlgorithm alg;
   unsigned rlen(alg.RLen(params)), slen(alg.SLen(params));
 
   // sign message
@@ -558,7 +567,7 @@ readSignature(Source & bt,
 {
   // get information about dsa signature
   DL_GroupParameters_GFP const & params = verify.GetKey().GetGroupParameters();
-  DSA::SchemeOptions::SignatureAlgorithm alg;
+  DSA_SignatureAlgorithm alg;
   unsigned rlen(alg.RLen(params)), slen(alg.SLen(params));
 
   // receive signature as two MPI's
@@ -912,7 +921,7 @@ int main(int argc, char **argv)
 
       Socket listener, socket;
       listener.Create();
-      listener.Bind(878);
+      listener.Bind(port);
       listener.Listen(5);
       listener.Accept(socket);
       disableNagle(socket);
