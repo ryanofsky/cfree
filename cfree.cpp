@@ -592,14 +592,14 @@ makeKey(const byte * entropy, unsigned entropyLen, byte * key, unsigned len)
   // freenet.crypt.Util.makeKey(byte[], byte[], int, int)
   SHA ctx;
 
-  int ic=0;
+  unsigned ic=0;
   while (len>0)
   {
     ic++;
     assert (ic <= sizeof(zeroes));
     ctx.Update(zeroes, ic);
     ctx.Update(entropy, entropyLen);
-    int bc=ctx.DigestSize();
+    unsigned bc=ctx.DigestSize();
     if (len>bc)
     {
       ctx.Final(key);
