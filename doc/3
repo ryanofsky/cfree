@@ -1,0 +1,986 @@
+   <h1>The Freenet Protocol</h1>
+
+    <p><a href="mailto:agl@linuxpower.org">Adam Langley</a></p>
+
+    <p>This document is still in production - don't take it as
+    gospel yet</p>
+
+    <h2>Introduction</h2>
+
+    <p>The Freenet protocol is based around the idea of message
+    passing between nodes on the network. Messages contain a name,
+    a series of headers and an optional trailing field. The
+    trailing field, if present, carries data. Nodes should act on
+    messages in a consistent manner and, if they do, this leads to
+    the formation of an adaptive network.</p>
+
+    <p>The end goal of a Freenet network is to store Documents and
+    allow them to be retrieved later by Key, much the same as is
+    now possible with protocols such as HTTP. The network is
+    implemented as a number of Nodes that pass Messages among
+    themselves peer-to-peer. Typically, a host computer on the
+    network will run the software that acts as a node, and it will
+    connect to other hosts running that same software to form a
+    large distributed network of peer nodes. Certain nodes will be
+    end user nodes, from which documents will be requested and
+    presented to the human user. But these nodes communicate with
+    each other and with intermediate routing nodes identically &mdash;
+    there are no dedicated &quot;clients&quot; or &quot;servers&quot; on the
+    network.</p>
+
+    <p>Freenet protocol is intended to be implemented on a network
+    with a complex network topology, much like IP (Internet
+    Protocol). Each node knows only about some number of other
+    nodes that it can reach directly (its conceptual
+    &quot;neighbors&quot;), but any node can be a neighbor to any other;
+    there is no hierarchy or other structure. Each document (or
+    other message such as a document request) in Freenet is routed
+    through the network by passing from neighbor to neighbor until
+    reaching its destination. As each node passes a document to its
+    neighbor, it does not know or care whether its neighbor is just
+    another routing node forwarding information on behalf of
+    another, whether it is the source of the document being passed,
+    or whether it is a user node that will present the document to
+    an end user. This is intentional, so that anonymity of both
+    users and publishers can be protected.</p>
+
+    <p>Each node maintains a data store containing documents
+    associated with keys. With each document it also stores the
+    address of another node where that document came from (and
+    possibly some limited metadata about the document). In addition
+    it may have some keys for documents that have been deleted (due
+    to lack of use, memory limits, etc.), but in that case it also
+    retains a pointer to another node that may still have the
+    data.</p>
+
+    <p>To find a document in the network given a key, a user sends
+    a message to a node (probably one running on the same machine
+    as the client program) requesting the document, providing it
+    with the key. If no matching key is present in the local data
+    store, the node then finds the &quot;closest&quot; key it does have
+    (where &quot;close&quot; is defined appropriately as specified later)
+    and forwards the request to the node associated with that key,
+    remembering that it has done so.</p>
+
+    <p>The node to which the request was forwarded repeats the
+    process until either the key is found or a number of hops is
+    reached to indicate failure. Along the route, if a node is
+    visited more than once (and it will know this because it
+    remembered forwarding the request the first time) then that node
+    cuts off the loop by sending a message to the node that sent it
+    the second request telling it to start looking at the node
+    associated with the next-closest data item, the
+    next-next-closest, and so on.</p>
+
+    <p>Eventually either the document is found or the hop limit is
+    exceeded, at which point the node sends back a reply that works
+    its way back to the originator along the route specified by the
+    intermediate nodes' records of pending requests. The
+    intermediate nodes may choose to cache the document being
+    delivered to optimized later requests for it.</p>
+
+    <p>Essentially the same path-finding process is used to insert
+    a document into the network, the document being stored at each
+    node along the path.</p>
+
+    <p>When a new node starts up, a &quot;dummy&quot; entry with a random
+    key is inserted into its data store for each other node it
+    knows about. Then when an initial request enters the node, one
+    or more of these dummy entries will be the closest. This will
+    determine which other node requests are forwarded to first.</p>
+
+    <p>Initially, then, each node has a purely random set of keys
+    for every other node that it knows about. This means that the
+    nodes to which it sends a given data item will depend entirely
+    on what these random keys are. But since different nodes use
+    different random keys, each node will initially disagree about
+    where to look for or send data, given a key. The data in a
+    newly-started Freenet will therefore be distributed somewhat
+    randomly.</p>
+
+    <p>As more documents are inserted by the same node, they will
+    begin to cluster with data items whose keys are similar,
+    because the same routing rules are used for all of them. More
+    importantly, as data items and requests from different nodes
+    &quot;cross paths&quot;, they will begin to share clustering
+    information as well.</p>
+
+    <p>The result is that the network should self-organize into a
+    distributed, clustered structure where nodes tend to hold data
+    items that are close together in key space. There will probably
+    be multiple such clusters throughout the network, any given
+    document being replicated numerous times, depending on how much
+    it is used. This is a kind of &quot;spontaneous symmetry
+    breaking&quot;, in which an initially symmetric state (all nodes
+    being the same, with random initial keys for each other) leads
+    to a highly asymmetric situation, with nodes coming to
+    specialize in data that has certain closely related keys.</p>
+
+    <p>There are forces which tend to cause clustering (shared
+    closeness data spreads throughout the network), and forces that
+    tend to break up clusters (local caching of commonly used
+    data). These forces will be different depending on how often
+    data is used, so that seldom-used data will tend to be on just
+    a few nodes which specialize in providing that data, and
+    frequently used items will be spread widely throughout the
+    network.</p>
+
+    <p>One thing to keep in mind is that keys are presently hashes,
+    hence there is no notion of semantic closeness when speaking of
+    key closeness. Therefore there will be no correlation between
+    key closeness and similar popularity of data as there might be
+    if keys did exhibit some semantic meaning, thus avoiding
+    bottlenecks caused by popular subjects.</p>
+
+    <h2>Keys</h2>
+    There are a number of different key types in Freenet. Every key
+    encodes its key type in the last two bytes. Different key types
+    have different properties &mdash; some are unforgeable, some
+    updatable. Data inserted into Freenet generally insert more
+    than one document so that the properties of more than one key
+    can be used. Keys are explained in detail in the Keys section. 
+
+    <h2>Timeouts</h2>
+    Since Freenet is distributed it must handle the case where
+    nodes have failed. Timeouts are part of that handling. The
+    length of time in seconds that a node should wait for a reply
+    is a function of the HopsToLive of the message. It is defined
+    as (mean * hops) + (1.28 * sd * sqrt (hops)). Where mean and sd
+    are 12. 
+    <!-- (\mu \times hops) + (1.28 \sigma \times \sqrt{hops). Where \mu is 12 and \sigma is also 12. -->
+     
+
+    <h2>Sample Chain</h2>
+
+    <p>To aid understanding you might want to look through some
+    sample chains of requests.</p>
+    <img alt="A diagram of 5 nodes" src="fnp-1.png"> 
+
+    <p>Here is our very small test network of Freenet nodes. As a
+    convention node A will be a `client' node - that is it will
+    always start the chain. Line are in the format:</p>
+<pre>
+A-&gt;B Name HTK Depth
+</pre>
+
+    <p>where A and B are the names of node and Name is the name of
+    a message. First a simple data request:</p>
+<pre>
+A-&gt;B HandshakeRequest 1 1
+B-&gt;A HandshakeReply 1 1
+A-&gt;B DataRequest 10 3
+B-&gt;C HandshakeRequest 1 1
+C-&gt;B HandshakeReply 1 1
+B-&gt;C DataRequest 9 4
+C-&gt;A HandshakeRequest 1 1
+A-&gt;C HandshakeReply 1 1
+C-&gt;A DataRequest 8 5
+A-&gt;C RequestFailed
+C-&gt;D HandshakeRequest 1 1
+D-&gt;C HandshakeReply 1 1
+C-&gt;D DataRequest 7 5
+D-&gt;C DataReply 5 2
+C-&gt;B DataReply 4 3
+B-&gt;A DataReply 3 4
+</pre>
+
+    <p>Thats quite a lot of messages, but all the handshake
+    messages are a little redundant. So the same again, but without
+    handshaking.</p>
+<pre>
+A-&gt;B DataRequest 10 3
+B-&gt;C DataRequest 9 4
+C-&gt;A DataRequest 8 5
+A-&gt;C RequestFailed
+C-&gt;D DataRequest 7 5
+D-&gt;C DataReply 5 2
+C-&gt;B DataReply 4 3
+B-&gt;A DataReply 3 4
+D-&gt;C StoreData 5 2
+C-&gt;B StoreData 4 3
+B-&gt;A StoreData 3 4
+     
+</pre>
+
+    <p>Thats better. Now we can see that the request went through
+    nodes B, C and D, and that D had the data. It should be noted
+    that C tried to forward the request back to A, but since A knew
+    about the UniqueID it didn't create a loop.</p>
+
+    <h2>DataStore</h2>
+
+    <h3>Problems</h3>
+    There are a number of things that a good design of the
+    DataStore will perform well at. Design ideas should be judged
+    on how well they stand up against these. 
+
+    <ul>
+      <li>The Store should be able to rapidly find the document
+      information of a given key</li>
+
+      <li>The Store should be able to rapidly find the closest key
+      to a given key, that it knows about.</li>
+
+      <li>The Store should be able to keep an idea of the relative
+      popularity of documents and thus know which document to
+      delete when under pressure</li>
+
+      <li>The Store should be reasonably resistant to flood
+      attacks</li>
+    </ul>
+
+    <h3>Document Meta-Structures</h3>
+
+    <h4>Hash Table</h4>
+
+    <p>Firstly, some of the problems are quite simple to solve. To
+    rapidly find documents given a key a hash table should be used.
+    Since the documents are going to have to be in multiple
+    structures to meet other points above it makes sense if the
+    objects are in dlists.</p>
+    <img alt="A diagram of a hash table" src="fnp-2.png"> 
+
+    <p>The key would be hashed to get an index into the hash table.
+    From there you would do a linear search of the list until you
+    found the right document (or until you hit null, in which case
+    you don't have that document). The hash table should be quite
+    long as, at only a word per entry, entries are cheap and speed
+    up searching.</p>
+
+    <h4>COC List</h4>
+
+    <p>To keep an idea of how popular documents are they also need
+    to be in order. At the top of the list should be the most
+    popular. At some point in this list there should be a point
+    where any documents below it are simply references. As new
+    documents are put above this point older documents may have to
+    be pushed below this mark (and thus it's data is deleted -
+    freeing up space for the new document).</p>
+    <img alt="A diagram of the COC list" src="fnp-3.png"> 
+
+    <p>This raises the question of how documents climb up the COC
+    list. One option is to simply move a document to the top of the
+    list when it is requested &mdash; hopefully the item will float to
+    it's right level over time. This is, however, quite vulnerable
+    to flood attacks. An attacker could simply insert and request
+    pushing all other documents out of the store. Although a store
+    cannot stop a consistent, high speed flood it should not be
+    this mutable. This system also disregards the size of the
+    document. A 1MB document could push out many smaller ones and
+    so the 1MB document should have to be more popular to move the
+    same distance as a smaller one. This creates a pressure for
+    people to compress documents before inserting them (because you
+    can't compress after encryption).</p>
+
+    <p>Rather than just jump a document to the top of a stack a
+    more complicated system could be used. Each document would be
+    given a weighting and they could be sorted based on it. As a
+    simple example: weighting = x * (size_of_document /
+    size_of_store) + y * (requests_of_doc / requests_ever). Where
+    x and y would be user configured.</p>
+
+    <p>This would mean the store changes more slowly as the
+    documents would move up or down slowly, rather than jumping up
+    suddenly. This does mean that a list might no longer be the
+    best structure for the COC. The weighings would have to be
+    recalculated for everything at intervals as requests_ever keeps
+    changing, and possibly the COC would be recalculated each time
+    a document was requested. Keeping the COC as a list would
+    utterly cripple a hash sort (an algorithm that seems like it
+    could be a good idea here), and slow down a quick-sort (another
+    good candidate algorithm). To keep random access times low and
+    the amount of data that has to be moved also low a
+    vector&lt;Document *&gt; seems the best structure for this
+    system</p>
+    <img alt="A diagram of an array of pointers" src="fnp-4.png"> 
+
+    <p>There is still a point where documents no longer contain
+    data, but it's in a vector not a list. The vector would be
+    sorted by the weight of the document. This system is much more
+    flexible, as it also allows for the weighing to be affected by
+    other things (such as who the document is signed by).</p>
+
+    <h3>Finding close documents</h3>
+
+    <p>Neither a hash table or an COC list/vector is very good at
+    finding close documents. Where close if defined by the key
+    relationship. However with the current 1-dimensional keys
+    closeness can be defined between 2 keys, rather than only
+    between 3 keys as laid out by Ian's report. This situation
+    breaks down with keys of any other dimensionality.
+    Unfortunately in the quest for routable searching we might
+    switch to other types of keys for which this wont work.
+    Currently both the Java node and Whiterose use this trick so if
+    we do switch there will be some deep sighs.</p>
+
+    <p>The idea is to exploit this ability to order 2 1d keys to
+    construct a binary tree. To the left of any document is a
+    sub-branch containing documents with a lower key, and
+    vice-versa for the right hand side.</p>
+    <img alt="A diagram of a tree structure" src="fnp-5.png"> 
+
+    <p>Finding a key of (for example) 8 in this tree structure is
+    going to be quite fast. Since it's a binary tree the search
+    times are based on log2 n &mdash; much faster than a full-linear
+    search of any of the other structures.</p>
+
+    <p>Finding the closest key from a tree of documents is quite
+    fast but finding keys further and further out becomes a bit of
+    a pain. It is possible to construct an order list of documents
+    in key order (documents can be inserted in this list by the
+    tree, making insert a fast operation). So that finding a list
+    of keys further out becomes a simple walk-outward from a node
+    in the list. This is a speed/space tradeoff; it requires 2
+    pointers extra per document.</p>
+
+    <h2>Message Format</h2>
+
+    <p>The format of messages is simple. All messages must be
+    passed over a clean channel. That is, it must not change the
+    data in anyway. If the presentation layer cannot do this, it
+    must encode/decode data in a way that simulates this (for
+    example base64 encoding for emails).</p>
+
+    <p>Messages upto the trailing field are broken into lines. A
+    new line is denoted by a single line break charactor. It should
+    be noted that these lines are UTF-8 encoded.</p>
+
+    <p>The first line is the message type. Following are a number
+    of key-value headers with the key and value seperated by a
+    single = charactor. Then there is a marker that signals the
+    presence of a trailing field. The marker can either be
+    EndMessage or Data. The latter means a trailing field follows
+    the message. If there is a trailing field there must be a
+    numeric header called DataLength giving the length of the
+    trailing field in bytes. Here is an example of a well formed
+    message.</p>
+<pre>
+      DataReply
+UniqueID=C24300FB7BEA06E3
+Depth=a
+HopsToLive=2c
+Source=tcp/127.0.0.1:2386
+DataLength=131
+Data
+ 'Twas brillig, and the slithy toves
+Did gyre and gimble in the wabe:
+All mimsy were the borogoves
+And the mome raths outgrabe.
+     
+</pre>
+
+    <p>Here the message type is DataReply and there is a trailing
+    field. The type of value after a header key is defined by the
+    name of the key. Where the type is numeric the number is always
+    expressed in hex notation as can be seen in the HopsToLive
+    header. Addresses are in the format transport/address. The only
+    current valid transport is tcp and a TCP address is in the form
+    ip:port. This can be seen in the Source header. The port number
+    is not optional in addresses as Freenet has no default
+    port.</p>
+
+    <h3>Format Grammar</h3>
+
+    <p>Here is a more precise grammar for the message packet format
+    described above.</p>
+<pre>
+    OCTET = &lt; 0x00..0xFF &gt;
+    CHAR = &lt; 0x20..0xFF &gt;
+    ALPHA = &lt; 0x40..0x59, 0x60..0x79 &gt;
+    DIGIT = &lt; 0x30..0x39 &gt;
+    LF = &lt; 0x0A &gt;
+
+    NewLine = LF
+    SubFieldName = ALPHA *(ALPHA or DIGIT)
+    FieldName = SubFieldName *(&quot;.&quot; SubFieldname)
+    FieldValue = *CHAR
+    MessageType = FieldName NewLine
+    HeaderField = FieldName &quot;=&quot; FieldValue NewLine
+    EndMessage = &quot;EndMessage&quot; NewLine
+    TrailingName = &quot;Data&quot; NewLine
+    Payload = *OCTET
+    MessagePacket = MessageType
+                    1*HeaderField
+                    EndMessage or (TrailingName Payload)
+     
+</pre>
+
+    <h3>Common Headers</h3>
+
+    <p>There are number of headers that are common across many
+    message types. Their general meaning is documented here, but it
+    should be noted that these headers might always have exactly
+    this meaning with all message types.</p>
+
+    <h4>UniqueID</h4>
+
+    <p>The UniqueID header contains a 64-bit numeric value that
+    identifies related messages. When forwarding a message, the
+    forwarded message inherits the UniqueID. This is used to stop
+    loops forming in the network. The UniqueID is set to a random
+    value by the node that starts a chain. At any one time every
+    chain of messages in the network should have a unique UniqueID,
+    thou this might not be true over time.</p>
+
+    <h4>HopsToLive</h4>
+
+    <p>The HopsToLive header is numeric and acts like the TTL of IP
+    datagrams. Every node that forwards a message reduces the
+    HopsToLive by one. If a message has a HopsToLive of 1 it cannot
+    be forwarded and special action is taken in these cases.
+    Receiving a message with a HopsToLive of 0 is an error.</p>
+
+    <h4>Depth</h4>
+
+    <p>Depth is used to track how far away from its origin a
+    message has travelled. It is in some ways the reverse of
+    HopsToLive, in that it is anumeric value that is incremented
+    each time a message is forwarded. The primary difference is in
+    how loopbacks are treated. When a request being forwarded
+    around the net reaches a node that is has already visited, that
+    node sends a reply advising the immediately previous node of
+    this condition, and that node chooses somewhere else to forward
+    the original request. At each of these two hops, HopsToLive is
+    modified, but Depth is not.</p>
+
+    <h4>KeepAlive</h4>
+
+    <p>The KeepAlive header can have a value of either true or
+    false. If the KeepAlive header is omitted the node should treat
+    it as if it were set to true. If it is set to false the node
+    who send the message should close the connection after that
+    message has been sent.</p>
+
+    <h4>Source</h4>
+
+    <p>Source identifies the sender of a message. Messages should
+    always have a Source header if possible. Since Freenet is a
+    message based protocol nodes are free to close idle
+    connections, in most situations, and connect back to the source
+    when responding. The Source header is in address format and
+    should contain an address which a node can connect to. In the
+    case of TCP it should have the port number on which the node is
+    listening. Since nodes connect to this address, some sanity
+    checks should be made. A node shouldn't ever give a source
+    which contains a different IP address from that which it is
+    sending from, and the port number should be greater than 1024.
+    These sanity checks are the nodes' own business.</p>
+
+    <p>Some nodes cannot give a Source header because they don't
+    want to be connected to, or are behind a firewall that blocks
+    incomming connections. These nodes should omit the Source
+    header and take special measures. Since two messages cannot go
+    down the same connection at one time these nodes should open
+    new connection for every message that is likly to generate a
+    large reply. If a node has a number of messages that have to go
+    down the same connection it should make an effort to queue
+    them, but may drop them if it needs. These connections should
+    not be closed if simply idle, but are closed as normal after
+    KeepAlive=false messages.</p>
+
+    <h4>Storable</h4>
+
+    <p>Storable headers begin with the string Storable. and are
+    free form text strings. When caching a document a node must
+    also cache all the Storable headers and any DataReply messages
+    generated must also have the same Storable headers.</p>
+
+    <p>Some headers are interpreted by nodes (for example
+    Storable.Public-key is used by some key types)</p>
+
+    <h3>Message Types</h3>
+
+    <h4>HandshakeRequest</h4>
+
+    <p>The HandshakeRequest message should be sent after
+    connecting. It allows nodes to check the node is active and
+    that protocol version numbers match.</p>
+
+    <p>When sending the node must generate a random UniqueID value,
+    this will never be passed on so need be be very random. The
+    HopsToLive and Depth must be set to 1. Source should be
+    set.</p>
+
+    <p>When receiving the node should respond with a
+    HandshakeReply.</p>
+
+    <h4>HandshakeReply</h4>
+
+    <p>A HandshakeReply is sent in responce to a
+    HandshakeRequest.</p>
+
+    <p>When sending it must inherit the UniqueID from the
+    HandshakeRequest and HopsToLive and Depth should be set to 1.
+    Three extra headers should be set - Version, Build and Revision
+    to the values that the nodes implements. The current values can
+    be found at the start of Core.java.</p>
+
+    <p>If you receive a HandshakeReply unbidden (e.g. you never
+    sent a request) you must be slient and may ignore it or record
+    the address.</p>
+
+    <h4>DataRequest and InsertRequest</h4>
+
+    <p>These two messages are very similar and will be dealt with
+    together. These messages must have a SearchKey field that
+    contains a key expressed in hex format. When receiving, the
+    node should search it's data store for a document addressed by
+    that key. If one is found the node should reply with a
+    DataReply message with that document as it's body.</p>
+
+    <p>If a document isn't found the node should forward the
+    message. If the message has expired (the HopsToLive is 0 after
+    decrementing) reply with the correct message. In the case of a
+    DataRequest a TimedOut message is correct, in the case of an
+    InsertRequest it's a InsertReply message. These messages follow
+    all the rules of replies.</p>
+
+    <p>In the case that you replied with an InsertRequest you
+    should record that fact and expect a DataInsert message soon
+    with the same UniqueID containing the document relating to
+    SearchKey.</p>
+
+    <h4>DataReply and DataInsert</h4>
+
+    <p>Again, these messages are similar and so I'll deal with them
+    together. These messages are the only messages that have
+    trailing fields, and they must have them. When you forward
+    these messages you should try to cache the trailing field and
+    store it in your data store.</p>
+
+    <p>Since they have trailing fields they must also have a
+    DataLength header, and will generally have Storable headers
+    that you must cache.</p>
+
+    <p>The SearchKey header is not set in these messages, or nodes
+    must know the key from matching up the UniqueID with a previous
+    InsertReply or DataRequest. If a node has `forgotton' about the
+    UniqueID it may cache the data, but it must be silent.</p>
+
+    <h4>QueryRestarted</h4>
+
+    <p>This message signals that an upstream node has restarted the
+    query and that you should restart the timeout.</p>
+
+    <h2>Cryptographic Link Layer</h2>
+
+    <p>The current key exchange system is Diffie-Hellman (Applied
+    Cryptography, Chapter 22). The following is quoted from Applied
+    Cryptography.</p>
+
+    <div class="abstract">
+      <p>The math is simple. First, Alice and Bob agree on a large
+      prime, n and g such that g is primitive mod n. These two
+      integers don't have to be secret; Alice and Bob can agree to
+      them over some insecure channel. They can even be common
+      among a group of users. It doesn't matter.</p>
+
+      <p>Then, the protocol goes as follows:</p>
+
+      <ul>
+        <li>Alice chooses a random large integer x and sends Bob: X
+        = g<sup>x</sup> mod n</li>
+
+        <li>Bob chooses a random large integer y and sends Alice: Y
+        = g<sup>y</sup> mod n</li>
+
+        <li>Alice computes: k = Y<sup>x</sup> mod n</li>
+
+        <li>Bob computes: k' = X<sup>y</sup> mod n</li>
+      </ul>
+
+      <p>Both k and k' are equal to g<sup>xy</sup> mod n. No one
+      listening on the channel can compute that value; they only
+      know n, g, X and Y. Unless they can compute the discrete
+      logarithm and recover x or y, they do not solve the problem.
+      So, k is the secret key that both Alice and Bob computed
+      independently.</p>
+    </div>
+
+    <p>Freenet uses a fixed 1024 bit n, it's an IPSec standard
+    prime:</p>
+<pre>
+FFFFFFFF FFFFFFFF C90FDAA2 2168C234 C4C6628B 80DC1CD1
+29024E08 8A67CC74 020BBEA6 3B139B22 514A0879 8E3404DD
+EF9519B3 CD3A431B 302B0A6D F25F1437 4FE1356D 6D51C245
+E485B576 625E7EC6 F44C42E9 A637ED6B 0BFF5CB6 F406B7ED
+EE386BFB 5A899FA5 AE9F2411 7C4B1FE6 49286651 ECE65381
+FFFFFFFF FFFFFFFF
+   
+</pre>
+
+    <p>The generator (g) is 2. When sending or hashing etc MPI
+    (multi-precision-integers) are defined the same way the OpenPGP
+    spec does.</p>
+
+    <h3>MPIs</h3>
+
+    <p>Multi-Precision Integers (also called MPIs) are unsigned
+    integers used to hold large integers such as the ones used in
+    cryptographic calculations.</p>
+
+    <p>An MPI consists of two pieces: a two-octet scalar that is
+    the length of the MPI in bits followed by a string of octets
+    that contain the actual integer.</p>
+
+    <p>These octets form a big-endian number; a big-endian number
+    can be made into an MPI by prefixing it with the appropriate
+    length. Examples:</p>
+
+    <p>The string of octets [00 01 01] forms an MPI with the value
+    1. The string [00 09 01 FF] forms an MPI with the value of 511.
+    The size of an MPI is ((MPI.length + 7) / 8) + 2 octets. The
+    length field of an MPI describes the length starting from its
+    most significant non-zero bit. Thus, the MPI [00 02 01] is not
+    formed correctly. It should be [00 01 01].</p>
+
+    <h3>Block Cipher Key Generation</h3>
+
+    <p>Hash (using SHA1) e and k (where k is in MPI format). In
+    this e is an array consisting of m octets of 0x00, initially m
+    = 1. Each hash generates 20 octets of key data. The length of
+    the key depends of the block cipher used (currently Rijndael).
+    To generate more key data, increment m, regenerate e and hash
+    again. For example:</p>
+    Hash [0 k] for the first 20 key bytes (e = [0] because m =
+    1)<br>
+     Hash [0 0 k] for the next 20 bytes (m = 2)<br>
+     Hash [0 0 0 k] for the next 20 bytes (m = 3)<br>
+     
+
+    <p>Now both sides have the shared key we switch to sending data
+    with the block cipher in PCFB mode.</p>
+
+    <h3>PCFB Mode</h3>
+
+    <p>PCFB mode is Periodic Cipher Feedback Mode. Each direction
+    is treated as a different object. The code is the same but you
+    have one set of data for receiving and one for transmitting.
+    The text below describes one side only, and remember this
+    happens on both ends. The advantage of PCFB is that you can
+    send a single byte at a time.</p>
+
+    <p>A feedback register is setup, a[]. In the Java code it is
+    named feedback_register[]. The register is equal to the
+    cipher's block size. Fill a[] with random bytes and transmit
+    those random bytes to the peer. That's the initialization
+    vector (IV). The peer puts that data into its a[], then both
+    sides encrypt a[], replacing its contents with the newly
+    encrypted data.</p>
+
+    <p>To transmit a byte, XOR it with a byte from a[] and also
+    replace the byte in a[] with the cipher-byte. To fill a
+    transmit buffer t[] from a plain text buffer p[] do:</p>
+    for (i = 0; i &lt; BLOCKSIZE; i++) t[i] = a[i] = p[i] XOR
+    a[i];<br>
+     
+
+    <p>The peer can now decrypt t[] by XORing it with a[], the peer
+    also replaces a[] with t[]. In other words, both ends put the
+    encrypted byte in the feedback register, a[]). Both sides need
+    to keep a pointer (i in the code above) telling where in the
+    register you are.</p>
+
+    <p>Once you have transmitted a block worth of bytes you need to
+    re-encrypt the register. To do so, encrypt a[] to get the new
+    a[]. Note that this uses the block cipher in encryption mode
+    for both encryption and decryption. You then continue with the
+    re-encrypted a[].</p>
+
+    <h3>PCFB Summary</h3>
+
+    <h4>Sending</h4>
+
+    <ul>
+      <li>Create a buffer, called the feedback register that is
+      equal to the block-size of the symmetric cipher used with
+      PCFB mode.</li>
+
+      <li>Create a random initialization vector, IV, and transmit
+      it to the peer, then encrypt it with the block-cipher and
+      store the results in the feedback register.</li>
+
+      <li>To transmit a byte, XOR the plaintext byte with a byte
+      from the feedback register, then place the resulting byte
+      back in the feedback register in place of the byte used in
+      XOR.</li>
+
+      <li>Transmit the byte.</li>
+
+      <li>When every byte in the buffer has been used (and replaced
+      by the corresponding cipher byte), encrypt the feedback
+      register, yielding a new register to use for
+      transmission.</li>
+    </ul>
+
+    <h4>Receiving</h4>
+
+    <ul>
+      <li>Receive the initialization vector from the peer, encrypt
+      it, and place the results in the feedback register.</li>
+
+      <li>When a ciphertext byte is received from the peer, XOR it
+      with a byte from the feedback register to form a plaintext
+      byte. Place the ciphertext byte back in the feedback
+      register.</li>
+
+      <li>When the entire feedback register has been used, encrypt
+      it using the block cipher and place the results in the
+      feedback register, yielding a new register to use for
+      reception.</li>
+    </ul>
+
+    <h2>Keys</h2>
+
+    <h3>Cancer</h3>
+
+    <p>Keys provide a way to stop cancer nodes responding with bad
+    data. For this to work every node must check the document it
+    gets. Chains of tunneling nodes need some way to signal that
+    one has found that the tunnel is bad. If they simply passed the
+    data on they would be seen as the cancer node.</p>
+
+    <p>Thus a system of control bytes are used. Each key type
+    handles the control bytes differently but in general there are
+    two. CB_OK marks that the upstream node thinks the data is
+    correct while CB_RESTARTED marks that an upstream node has
+    found the data is bad and is restarting the query.</p>
+
+    <p>Once a CB_RESTARTED has been received a node should break
+    out of tunneling and expect a message to be sent. It should
+    send CB_RESTARTED downstream as soon as possible.</p>
+
+    <h3>CHK (Content Hash Key)</h3>
+
+    <p>A CHK is an SHA1 hash of a document and thus a node can
+    check that the document returned is correct by hashing it and
+    checking the digest against the key.</p>
+
+    <p>This key contains the meat of the data on freenet. It
+    carries all the binary data building blocks for the content to
+    be delivered to the client for reassembly and decryption. The
+    CHK is unique by nature and provides tamperproof content. A
+    cancer node messing with the data under a CHK will immediately
+    be detected by the next node or the client. CHKs also reduce
+    the redundancy of data since the same data will have the same
+    CHK and will collide on insert.</p>
+
+    <p>However you can only check the hash if you have the whole
+    document. This is fine for small documents, but for large ones
+    it can be a huge waste of bandwidth to download the whole
+    document only to find it is incorrect.</p>
+
+    <p>Progressive CHK's allow the document to be checked in
+    stages, thus problems can be detected as soon as you have the
+    incorrect block of data.</p>
+    FIXME - CITE HERE 
+
+    <p>The length of a block is contained in the header
+    Storable.PartSize. When getting a stream of data do the
+    following.</p>
+
+    <ul>
+      <li>Set check_hash to the CHK. <i>Then, for each
+      block</i></li>
+
+      <li>Read in PartSize bytes of data, call it block_data. On
+      the final block there might not be a whole PartSize to read
+      in. In this case read in however many bytes are left and set
+      PartSize to that value.</li>
+
+      <li>Read in a hash. In the case of SHA1 this means 20 bytes
+      (160 bits), call it temp_hash</li>
+
+      <li>Read in 1 byte. This is the control byte. If it is 0x00
+      (CB_OK) then proceed. If it is 0x01 (CB_RESTARTED) then an
+      upstream node has found a problem. Switch out of tunnel mode
+      and back into message parsing mode. Expect a QueryRestarted
+      message</li>
+
+      <li>Hash block_data and temp_hash and assert that the hash
+      equals check_hash. If it does, proceed. If it doesn't then
+      send 0x01 as the control byte to all client nodes and then
+      send QueryRestarted. The sending node should be viewed as
+      evil because it lied</li>
+
+      <li>Copy temp_hash to check_hash</li>
+    </ul>
+
+    <h3>SVKs, SSKs and KSKs</h3>
+
+    <p>SVKs (Signature Verification Keys), SSKs (SVK Subspace Keys)
+    and KSKs (Keyword Signed Keys) are all based on public-key
+    cryptography and will be dealt here together. Currently Freenet
+    uses the DSA system for pubkey crypto.</p>
+
+    <p>From the protocol point of view, a KSK is strictly a subset
+    of the more general SVK keytype. The key type for SVK is 0x0201
+    and for KSK it's 0x0202. A KSK is different in that the public
+    key pair is generated from a string and so they replace
+    KHK's.</p>
+
+    <p>SSK's are simply the client-side representation of SVK's
+    with a document name. What these allow you to do is create a
+    very simple subspace in Freenet with guessable keys but control
+    over insertion.</p>
+
+    <p>When you have a DataReply for one of these key types you
+    need to check that Storable.Public-key hashes to produce that
+    key.</p>
+
+    <p>The data is in one large part DataLength bytes long. This
+    includes a single control byte at the end. In the future the
+    size of data of these key types will be limited. As you accept
+    the data, update an SHA1 hash of it. Once you have DataLength-1
+    bytes, generate the hash. Then check the signature in
+    Storable.Signature using Storable.Public-key. These contain
+    values in MPI format without the 2 length bytes, and are hex
+    encoded (e.g. a3bc32...). The length bytes aren't needed
+    because the length is known from the length of the string.
+    Storable.Signature contains 2 MPI's, separated by a comma.
+    These are r and s in the DSS signature system. SVK's and KSK's
+    have different, default shared moduli. They are known as GroupA
+    (for KSK's) and GroupB (for SVK's).</p>
+
+    <h4>Group A:</h4>
+<pre>
+p =
+b9850e5e9607d50d000000000000000000000000000000000
+00000002cdc65f1e9a7dccb571627333dd0520bf0deb206d7
+c2937330a7d6e73cec4928b172c7e8ea04cc075d18db1340d
+ac2065cbce69c5ff20b4bca2d89d2932204149a3b6811be27
+458e7d2518edf9bf4417acb1e79243fe6ae1eac68cef6d655
+
+q =
+cfabfbd9fa4661010d9d11d0c381bb574da72667
+
+g =
+2668d2935bdd27dad0a1f469c69c6f7e7bd5a3ea73adc6bc0
+a781c0a276993a0cdbb575635423744dd2e2fbd7e962ac5b4
+b79632f030ddef166c53cb002f692e2fd927f17e3e6bd404f
+573207557972c630c01e6cc8b37fb348ad2686f4b4e3e681d
+9ced93cde9f30a2f17380204274141dce60c6151ef1b7acd0
+39ab1227fcd     
+     
+</pre>
+
+    <h4>Group B:</h4>
+<pre>
+p =
+c9381f278f7312c7fffffffffffffffffffffffffffffffff
+fffffffa8a6d5db1ab21047302cf6076102e67559e1569484
+6e3c7ceb4e18b6c652aedcfb337af057bdc12dcfc452d3ae4
+cfc5c3b7586804d4983bd5370db5512cf313e9a2c9c138c60
+2901135c4cfbcbe92d29fe744831f63e3273908c4f62f2129      
+
+q =
+c88fa2a0b1e70ba3876a35140fddce3c683706ad      
+    
+g =
+65d3ccb70df16dc08822be40736bf951383f6c03ddfd51c1a
+41627fafb2b7f74a1e65ade0ab9f7c189c497cfb6fe6e9e7b
+a4160d7fd15bae68bff0e4a96f412e85924bcc89fee431406
+13afd124f425f891a2d3022f0a0444692e510fc5310360a21
+e3f729ab93f2ad81b0bbe27d86bc65cf385036969ede2473e
+     
+</pre>
+
+    <p>In SVK's only there may be a Storable.Group header that
+    overrides the default group. This contains 3 MPI's (no length,
+    hex encoded) that become the p, q and g in the DSS
+    signature system. They are comma separated.</p>
+
+    <p>If the control byte is CB_RESTARTED then an upstream node
+    has found that the data is wrong. Switch back to message mode
+    and expect a QueryRestarted. If the control byte is CB_OK and
+    the signature checks out, send CB_OK downstream (to whom you
+    have been tunneling all this time). If you have CB_OK and the
+    signature fails, break the connection, send CB_RESTARTED and
+    restart the query. You shouldn't ever talk to that node
+    again.</p>
+
+    <h3>Generating KSK's and SVK's</h3>
+
+    <ul>
+      <li>For KSK's, simply hash with SHA1 the UTF-8 encoded
+      keyword to obtain the 160 bit private key, x. The rest of
+      the procedure is the same as for SVK's.</li>
+
+      <li>Generate the public key y = g<sup>x</sup> mod p</li>
+
+      <li><i>SVK Only</i> If a document name exists, hash that with
+      SHA1 and add the stor\-able Storable.-Document-name with that
+      value.</li>
+
+      <li>Hash the bytes of the public key in binary MPI format. If
+      it's an SVK and there is a document-name then also hash the
+      hash of the document name. This results in the key
+      itself.</li>
+
+      <li>Encrypt the data. For SVK's generate a random key. For
+      KSK's use the UTF-8 bytes of the keyword as the input to the
+      key-generation algorithm.</li>
+
+      <li>Sign the hash of the encrypted data with DSA, producing r
+      and s.</li>
+
+      <li><i>SVK Only</i> It is possible to use a custom DSA group.
+      See above. If a custom group is used Storable.Group must be
+      set with the format above. Otherwise use Group B</li>
+
+      <li><i>KSK Only</i> Use Group A when calculating the
+      signature</li>
+
+      <li>Add Storable.Signature which contains r and s in hex
+      MPI format.</li>
+
+      <li>Append the keytype to the key value you have calculated.
+      For SVK's it is 0x0201, for KSK's it is 0x0202.</li>
+
+      <li>Append a single null byte (0x00) to the encrypted data.
+      This serves as the control-byte CB_OK that indicates a valid
+      data packet.</li>
+
+      <li>Insert the data under that key, with the storables
+      accumulated, and the encrypted data. Note that document
+      encryption should proceed as outlined in the
+      document-encryption (end-to-end) specs.</li>
+    </ul>
+
+    <h2>Glossary</h2>
+
+    <ul>
+      <li><b>Closeness</b> A relation among 3 keys (call them A, B,
+      and C) which asserts that &quot;A is closer to B than it is to
+      C&quot;. Since such comparisons are used to route requests, it is
+      important that all nodes use the same relation for keys.</li>
+
+      <li><b>Clustering</b> The effect whereby data with close keys
+      (under the chosen closeness relation) gets sorted to the same
+      nodes by the network. Clustering is fundamental to making
+      requests fast and scalable. But also dangerous: if Closeness
+      of Keys reflects any similarity in document content (as, for
+      example, plain English Keys would), this causes too many
+      documents of one kind to become centralized and vulnerable to
+      attack.</li>
+
+      <li><b>Document</b> A chuck of data linked to a key.
+      Inserting data into Freenet may lead to the insertion (or
+      updating) of more than one document.</li>
+
+      <li><b>Tunneling</b> The system of forwarding messages before
+      they have been completly received. It is very important to
+      reduce latency.</li>
+
+      <li><b>DSA</b> The Digital Signature Algorithm\refcite{2. A
+      variant of the Schnorr and ElGamal signature algorithms.</li>
+    </ul>
+
+    <h2>References</h2>
+
+    <p>[1] Gennaro, R and Rohatgi, P; &quot;How to Sign Digital
+    Streams&quot;, Advances in Cryptology &mdash; CRYPTO '97, 1997.</p>
+
+    <p>[2] U.S. National Institute of Standards and Technology,
+    NIST FIPS PUB 186, &quot;Digital Signature Standard&quot;, U.S.
+    Department of Commerce, May 1994</p>
