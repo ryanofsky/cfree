@@ -6,8 +6,7 @@
 /* Test program to start building an asynchronous i/o 
  * framework. Things that gots to be done
  *
- * 1) Wait function is too simplistic, needs to be generalized to be able
- *    to return error and status information.
+ * 1) Wait function needs to return error information.
  *    
  * 2) AsynchOp classes need to be rearranged and filled out. A first step is
  *    to generalize the interface enough to support multiple implementations,
@@ -19,6 +18,12 @@
  *    readline on top of read). I have some ideas for using cooperative
  *    threads (fibers) for this. It'll require another overhaul of wait().
  */
+
+struct NullType;
+
+// Forward declaration
+template <typename OPERATION, typename RESULT>
+struct ResultNode;
 
 //! Expression template for holding && operands in wait expressions
 template<typename LEFT, typename RIGHT>
@@ -33,10 +38,10 @@ struct AndNode
   struct Operand2Member
   {
     // If Operand is an leaf (i.e. an AsynchOp object) just hold a pointer
-    typedef OPERAND const * type;
-    static void assign(type &member, OPERAND const &operand)
+    typedef ResultNode<OPERAND, NullType> type;
+    static void assign(type &member, OPERAND &operand)
     {
-      member = &operand;
+      member.operation = &operand;
     }
   };
 
@@ -58,6 +63,33 @@ struct AndNode
   
   enum {EXPR_LEAF=false};
 
+  // Why the multiple declarations? The constructors must accept non-const
+  // reference arguments because we store non-const pointers to AsynchOp
+  // objects so they can be modified by wait(). But since we must accept 
+  // rvalues to support nested expressions, and the current C++ standard
+  // doesn't allow non-const references to rvalues, we have to accept const
+  // references as well. The ideal solution would be to accept rvalue 
+  // references, which have been proposed for a future version of C++, and
+  // would match both types of arguments. In the meantime, just catch
+  // both types of arguments by exhausting the combinations.
+  AndNode(LEFT & left_, RIGHT & right_)
+  {
+    Operand2Member<Left>::assign(left, left_);
+    Operand2Member<Right>::assign(right, right_);
+  }
+
+  AndNode(LEFT const & left_, RIGHT & right_)
+  {
+    Operand2Member<Left>::assign(left, left_);
+    Operand2Member<Right>::assign(right, right_);
+  }
+
+  AndNode(LEFT & left_, RIGHT const & right_)
+  {
+    Operand2Member<Left>::assign(left, left_);
+    Operand2Member<Right>::assign(right, right_);
+  }
+
   AndNode(LEFT const & left_, RIGHT const & right_)
   {
     Operand2Member<Left>::assign(left, left_);
@@ -68,12 +100,55 @@ struct AndNode
   {
   }
 
+  // accept non-const refs and rvalues (see "multiple declarations" above)
+  template<typename R>
+  AndNode<This, R> operator&&(R & r) const
+  {
+    AndNode<This, R> a(*this, r);
+    return a;
+  }
+
+  template<typename R>
+  AndNode<This, R> operator&&(R const & r) const
+  {
+    AndNode<This, R> a(*this, r);
+    return a;
+  }  
+};
+
+//! Expression template for holding >> operands in wait expressions
+template <typename OPERATION, typename RESULT>
+struct ResultNode
+{
+  typedef ResultNode<OPERATION, RESULT> This;
+
+  enum {EXPR_LEAF=false};
+
+  ResultNode(OPERATION & operation_, RESULT & result_)
+  : operation(&operation_), result(&result_)
+  {}
+
+  ResultNode()
+  : operation(NULL), result(NULL)
+  {}
+
+  // accept non-const refs and rvalues (see "multiple declarations" above)
+  template<typename R>
+  AndNode<This, R> operator&&(R & r) const
+  {
+    AndNode<This, R> a(*this, r);
+    return a;
+  }
+
   template<typename R>
   AndNode<This, R> operator&&(R const & r) const
   {
     AndNode<This, R> a(*this, r);
     return a;
   }
+  
+  OPERATION * operation;
+  RESULT * result;
 };
 
 //! Asynchronous Operation Base Class
@@ -95,10 +170,17 @@ struct AioOp : public AsynchOp, public aiocb
   }
 
   template<typename R>
-  AndNode<AioOp, R> operator&&(R const & r) const
+  AndNode<AioOp, R> operator&&(R & r)
   {
-    AndNode<AioOp, R> a(*this, r);
-    return a;
+    AndNode<AioOp, R> n(*this, r);
+    return n;
+  }
+
+  template<typename R>
+  ResultNode<AioOp, R> operator>>(R & r)
+  {
+    ResultNode<AioOp, R> n(*this, r);
+    return n;
   }
 };
 
@@ -132,7 +214,17 @@ struct ReadOp : public AioOp
     AioOp::init(filedes, offset, buffer, len);
     if (aio_read(this))
       throw IOError(errno EARGS);
-  }
+  }  
+
+  struct Result
+  {
+    aiocb * cb;
+
+    int bytesRead()
+    {
+      return aio_return(cb);
+    }
+  };
 };
 
 void wait(const aiocb * list[], size_t len)
@@ -183,10 +275,21 @@ static inline void buildList(WaitList & waitList, AndNode<LEFT, RIGHT> const & n
   buildList(waitList, node.right);
 }
 
-static inline void buildList(WaitList & waitList, aiocb const * value)
+template<typename OPERATION>
+static inline void 
+buildList(WaitList & waitList, ResultNode<OPERATION, NullType> const & node)
 {
-  waitList.push_back(value);
+  waitList.push_back(node.operation);
 }
+
+template<typename OPERATION, typename RESULT>
+static inline void 
+buildList(WaitList & waitList, ResultNode<OPERATION, RESULT> const & node)
+{
+  waitList.push_back(node.operation);
+  node.result->cb = node.operation;
+}
+
 
 int main(int, const char *[])
 {
@@ -204,9 +307,10 @@ int main(int, const char *[])
 
     for (;;)
     {
-      wait(readOp && writeOp);
+      ReadOp::Result readResult;
+      wait(readOp >> readResult && writeOp);
 
-      ssize_t readLen = aio_return(&readOp);
+      ssize_t readLen = readResult.bytesRead();
       if (readLen == 0)
         break;
 
